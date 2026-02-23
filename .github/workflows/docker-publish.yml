@@ -1,0 +1,98 @@
+name: Build, Push & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            # Login to GHCR
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Ensure Traefik dynamic router exists
+            mkdir -p ~/traefik/dynamic
+            cat > ~/traefik/dynamic/quest-generator.yml << 'EOF'
+            http:
+              routers:
+                quest-generator:
+                  rule: "Host(`quest.calamity-online.cloud`)"
+                  service: quest-generator
+                  entryPoints:
+                    - websecure
+                  tls:
+                    certResolver: letsencrypt
+              services:
+                quest-generator:
+                  loadBalancer:
+                    servers:
+                      - url: "http://quest-generator:80"
+            EOF
+
+            # Deploy the container
+            mkdir -p ~/quest-generator
+            cd ~/quest-generator
+
+            cat > docker-compose.yml << 'EOF'
+            services:
+              quest-generator:
+                image: ghcr.io/connor93/quest-generator:latest
+                container_name: quest-generator
+                restart: unless-stopped
+                networks:
+                  - web
+            networks:
+              web:
+                external: true
+            EOF
+
+            docker compose pull
+            docker compose up -d --force-recreate
+            echo "✅ Quest Generator deployed to quest.calamity-online.cloud"

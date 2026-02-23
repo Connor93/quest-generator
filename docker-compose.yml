@@ -1,0 +1,11 @@
+services:
+  quest-generator:
+    image: ghcr.io/connor93/quest-generator:latest
+    container_name: quest-generator
+    restart: unless-stopped
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
