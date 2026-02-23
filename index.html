@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Generate EQF quest files for the Etheos MMORPG server with AI-powered dialog generation" />
+    <title>Quest Generator — EQF Quest Builder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📜</text></svg>">
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="header-left">
+          <span class="logo">📜</span>
+          <h1>Quest Generator</h1>
+          <span class="subtitle">EQF Quest Builder</span>
+        </div>
+        <div class="header-right">
+          <button id="btn-reference" class="header-btn" title="Reference Data">
+            <span>📖</span> Reference
+          </button>
+          <button id="btn-settings" class="header-btn" title="Settings">
+            <span>⚙️</span> Settings
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <main class="app-main">
+        <!-- Left Panel: Prompt + Templates -->
+        <section class="panel panel-left">
+          <div class="panel-header">
+            <h2>Create Quest</h2>
+          </div>
+
+          <!-- Prompt Area -->
+          <div class="prompt-section">
+            <label for="quest-prompt" class="section-label">Describe your quest</label>
+            <textarea
+              id="quest-prompt"
+              class="prompt-input"
+              placeholder="Example: I want a quest where the player talks to a Blacksmith NPC (vendor 5), who asks them to collect 30 Iron Ore (item 100), then return to forge a Legendary Sword as a reward..."
+              rows="6"
+            ></textarea>
+            <div class="prompt-actions">
+              <button id="btn-generate-ai" class="btn btn-primary btn-glow">
+                <span class="btn-icon">✨</span> Generate with AI
+              </button>
+              <button id="btn-generate-template" class="btn btn-secondary">
+                <span class="btn-icon">📋</span> Use Template
+              </button>
+            </div>
+            <div id="generate-status" class="status-bar hidden"></div>
+          </div>
+
+          <!-- Template Selector -->
+          <div id="template-section" class="template-section hidden">
+            <label class="section-label">Choose a Template</label>
+            <div class="template-grid" id="template-grid"></div>
+            <div id="template-params" class="template-params hidden"></div>
+            <div class="template-actions hidden" id="template-actions">
+              <button id="btn-build-template" class="btn btn-primary">
+                <span class="btn-icon">🔨</span> Build from Template
+              </button>
+              <button id="btn-cancel-template" class="btn btn-ghost">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Refine Section -->
+          <div id="refine-section" class="refine-section hidden">
+            <label class="section-label">Refine Quest</label>
+            <div class="refine-row">
+              <input
+                type="text"
+                id="refine-input"
+                class="refine-input"
+                placeholder="e.g. Make the NPC dialog more dramatic..."
+              />
+              <button id="btn-refine" class="btn btn-secondary btn-sm">
+                <span class="btn-icon">🔄</span> Refine
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Panel: Preview -->
+        <section class="panel panel-right">
+          <div class="panel-header">
+            <h2>EQF Preview</h2>
+            <div class="preview-actions">
+              <div id="validation-badge" class="validation-badge hidden">
+                <span class="badge-icon">✅</span>
+                <span class="badge-text">Valid</span>
+              </div>
+              <button id="btn-copy" class="btn btn-ghost btn-sm" title="Copy to clipboard">
+                📋 Copy
+              </button>
+              <button id="btn-download" class="btn btn-ghost btn-sm" title="Download .eqf file">
+                💾 Download
+              </button>
+            </div>
+          </div>
+          <div class="preview-container">
+            <pre id="eqf-preview" class="eqf-preview"><code class="eqf-code" id="eqf-code"><!-- Generated quest will appear here -->
+<span class="eqf-placeholder">Your generated quest will appear here.
+
+Use "Generate with AI" to create a quest from a description,
+or select a template to get started.</span></code></pre>
+          </div>
+          <div id="validation-details" class="validation-details hidden"></div>
+        </section>
+      </main>
+
+      <!-- Reference Panel (slide-in) -->
+      <aside id="reference-panel" class="slide-panel hidden">
+        <div class="slide-panel-header">
+          <h2>📖 Reference</h2>
+          <button id="btn-close-reference" class="btn-close">✕</button>
+        </div>
+        <div class="reference-search">
+          <input type="text" id="reference-search" placeholder="Search items, NPCs, maps..." />
+        </div>
+        <div id="ref-data-indicator" class="ref-data-indicator">📦 Default curated data</div>
+        <div class="reference-tabs">
+          <button class="tab-btn active" data-tab="npcs">NPCs</button>
+          <button class="tab-btn" data-tab="items">Items</button>
+          <button class="tab-btn" data-tab="spells">Spells</button>
+          <button class="tab-btn" data-tab="classes">Classes</button>
+          <button class="tab-btn" data-tab="actions">Actions</button>
+          <button class="tab-btn" data-tab="rules">Rules</button>
+        </div>
+        <div class="reference-content" id="reference-content"></div>
+      </aside>
+
+      <!-- Settings Panel (slide-in) -->
+      <aside id="settings-panel" class="slide-panel hidden">
+        <div class="slide-panel-header">
+          <h2>⚙️ Settings</h2>
+          <button id="btn-close-settings" class="btn-close">✕</button>
+        </div>
+        <div class="settings-content">
+          <!-- Game Data Upload -->
+          <div class="setting-group">
+            <label class="setting-label">📁 Game Data Files</label>
+            <p class="setting-desc">Load your pub files for accurate item/NPC/spell/class IDs. Supports <code>.eif</code>, <code>.enf</code>, <code>.esf</code>, <code>.ecf</code></p>
+            <div class="data-upload-area" id="data-upload-area">
+              <input type="file" id="pub-file-input" multiple accept=".eif,.enf,.esf,.ecf" />
+              <label for="pub-file-input" class="upload-label">
+                <span class="upload-icon">📂</span>
+                <span>Choose pub files or drag &amp; drop</span>
+                <span class="upload-hint">dat001.eif, dtn001.enf, dsl001.esf, dat001.ecf</span>
+              </label>
+            </div>
+            <div id="data-status" class="data-status"></div>
+            <button id="btn-clear-data" class="btn btn-ghost btn-sm hidden">🗑️ Clear loaded data</button>
+          </div>
+
+          <hr class="setting-divider" />
+
+          <!-- API Key -->
+          <div class="setting-group">
+            <label class="setting-label">Google AI API Key</label>
+            <p class="setting-desc">Get your key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a></p>
+            <div class="setting-row">
+              <input type="password" id="api-key-input" class="setting-input" placeholder="Enter your API key..." />
+              <button id="btn-toggle-key" class="btn btn-ghost btn-sm">👁️</button>
+            </div>
+            <button id="btn-save-key" class="btn btn-primary btn-sm">Save Key</button>
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">Model</label>
+            <select id="model-select" class="setting-select">
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Best quality)</option>
+              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+            </select>
+          </div>
+          <div class="setting-group">
+            <button id="btn-test-connection" class="btn btn-secondary">
+              🔌 Test Connection
+            </button>
+            <div id="connection-status" class="connection-status"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Overlay for panels -->
+      <div id="overlay" class="overlay hidden"></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
