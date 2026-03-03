@@ -232,11 +232,17 @@ async function handleGenerateAI() {
     showStatus('Auditing quest...', 'info');
     btn.innerHTML = '<span class="spinner"></span> Auditing...';
     try {
-      const audit = await auditQuest(eqf);
+      const audit = await auditQuest(eqf, validateEqf, (status) => {
+        showStatus(status, 'info');
+      });
       currentEqf = audit.eqf;
       updatePreview();
-      if (audit.wasFixed) {
-        showStatus(`Quest auto-fixed during audit 🔧 (${audit.issues.join('; ')})`, 'success');
+      if (audit.wasFixed && audit.finalValid) {
+        showStatus(`Quest auto-fixed during audit 🔧 (fixed: ${audit.issues.join('; ')})`, 'success');
+      } else if (audit.wasFixed && !audit.finalValid) {
+        showStatus(`Quest partially fixed — ${audit.remainingIssues.length} issue(s) remain`, 'success');
+      } else if (!audit.wasFixed && audit.issues.length > 0) {
+        showStatus('Quest generated (some warnings detected)', 'success');
       } else {
         showStatus('Quest generated and passed audit ✅', 'success');
       }
@@ -276,11 +282,15 @@ async function handleRefine() {
     // Auto-audit the refined quest
     showStatus('Auditing refined quest...', 'info');
     try {
-      const audit = await auditQuest(refined);
+      const audit = await auditQuest(refined, validateEqf, (status) => {
+        showStatus(status, 'info');
+      });
       currentEqf = audit.eqf;
       updatePreview();
-      if (audit.wasFixed) {
-        showStatus(`Quest refined and auto-fixed 🔧 (${audit.issues.join('; ')})`, 'success');
+      if (audit.wasFixed && audit.finalValid) {
+        showStatus(`Quest refined and auto-fixed 🔧 (fixed: ${audit.issues.join('; ')})`, 'success');
+      } else if (audit.wasFixed && !audit.finalValid) {
+        showStatus(`Quest refined, partially fixed — ${audit.remainingIssues.length} issue(s) remain`, 'success');
       } else {
         showStatus('Quest refined and passed audit ✅', 'success');
       }

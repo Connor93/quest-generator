@@ -4,7 +4,7 @@
  */
 import { GoogleGenAI } from '@google/genai';
 import { buildSystemPrompt } from './quest-data.js';
-import { buildReferenceString } from './reference-data.js';
+import { buildReferenceString, resolveEntities } from './reference-data.js';
 
 const STORAGE_KEY = 'quest-gen-api-key';
 const MODEL_KEY = 'quest-gen-model';
@@ -84,7 +84,16 @@ export async function generateQuest(prompt, onStatus) {
   const referenceData = buildReferenceString();
   const systemPrompt = buildSystemPrompt(referenceData);
 
+  // Pre-resolve entity names from the user prompt against loaded game data
+  const resolvedMatches = resolveEntities(prompt);
+
   onStatus?.('Generating quest with Gemini AI...');
+
+  // Inject pre-resolved entities into the prompt so the AI uses exact IDs
+  let enrichedPrompt = prompt;
+  if (resolvedMatches) {
+    enrichedPrompt = `${prompt}\n\n${resolvedMatches}\n\nIMPORTANT: Use the pre-resolved entity IDs listed above. These are the closest matches from the game data for the names I mentioned.`;
+  }
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
@@ -93,7 +102,7 @@ export async function generateQuest(prompt, onStatus) {
       systemInstruction: systemPrompt,
       temperature: 0.8,
     },
-    contents: prompt,
+    contents: enrichedPrompt,
   });
 
   const text = response.text;
@@ -144,85 +153,128 @@ export async function refineQuest(currentEqf, instruction) {
 }
 
 /**
- * Audit a generated quest by sending it back to the AI for validation.
- * If issues are found, the AI returns a corrected version.
+ * Audit a generated quest using the local validator, then AI-fix if needed.
+ * Uses validateFn (local deterministic validator) as the source of truth.
+ * Retries up to MAX_AUDIT_RETRIES if the AI fix still has errors.
+ *
  * @param {string} eqfContent - The generated EQF content to audit
+ * @param {function} validateFn - Local validator function (eqf => {errors, warnings, valid})
+ * @param {function} [onStatus] - Optional status callback for UI updates
  * @returns {Promise<{eqf: string, wasFixed: boolean, issues: string[]}>}
  */
-export async function auditQuest(eqfContent) {
+const MAX_AUDIT_RETRIES = 2;
+
+export async function auditQuest(eqfContent, validateFn, onStatus) {
   const apiKey = getApiKey();
   if (!apiKey) {
     return { eqf: eqfContent, wasFixed: false, issues: [] };
   }
 
-  const referenceData = buildReferenceString();
+  // Step 1: Run local validator first — it's the source of truth
+  const initialResult = validateFn(eqfContent);
+  if (initialResult.valid && initialResult.warnings.length === 0) {
+    // Quest is already clean — no need for AI audit
+    return { eqf: eqfContent, wasFixed: false, issues: [] };
+  }
 
-  const auditPrompt = `You are an EQF quest file validator. Analyze the following quest file for errors and fix any issues you find.
+  // Collect all issues found by local validator
+  const localIssues = [...initialResult.errors, ...initialResult.warnings];
 
-## CHECKS TO PERFORM:
-1. Every "goto StateName" target must exist as a defined "state StateName" block
-2. Every AddNpcInput link_id must have a matching InputNpc(link_id) rule in the SAME state
-3. Every state must be reachable (referenced by at least one goto, or is "Begin")
-4. The quest must terminate properly — at least one path leads to End() or Reset()
-5. All vendor_id values in AddNpcText/AddNpcInput/AddNpcChat must be consistent within each NPC
-6. No duplicate state names
-7. State names must be valid identifiers (no spaces, PascalCase preferred)
-8. Actions must use correct argument types (strings in quotes, numbers without)
-9. Every state transition must be logically sound (no impossible progression)
-10. The Main block must have questname and version
+  // Step 2: Send to AI for fixing, with the specific errors to address
+  let currentEqf = eqfContent;
+  let allIssuesFixed = [];
+  let wasFixed = false;
+
+  for (let attempt = 0; attempt < MAX_AUDIT_RETRIES; attempt++) {
+    const currentValidation = attempt === 0 ? initialResult : validateFn(currentEqf);
+    const currentIssues = [...currentValidation.errors, ...currentValidation.warnings];
+
+    if (currentValidation.valid && currentValidation.warnings.length === 0) {
+      break; // All clean
+    }
+
+    onStatus?.(`Fixing quest issues (attempt ${attempt + 1}/${MAX_AUDIT_RETRIES})...`);
+
+    const referenceData = buildReferenceString();
+    const fixedEqf = await requestAiFix(currentEqf, currentIssues, referenceData);
+
+    if (fixedEqf && fixedEqf !== currentEqf) {
+      currentEqf = fixedEqf;
+      wasFixed = true;
+      allIssuesFixed.push(...currentIssues);
+    } else {
+      // AI couldn't fix it or returned the same thing — stop retrying
+      break;
+    }
+  }
+
+  // Final validation check
+  const finalResult = validateFn(currentEqf);
+  const remainingIssues = [...finalResult.errors, ...finalResult.warnings];
+
+  return {
+    eqf: currentEqf,
+    wasFixed,
+    issues: wasFixed ? allIssuesFixed : localIssues,
+    remainingIssues,
+    finalValid: finalResult.valid,
+  };
+}
+
+/**
+ * Send EQF to the AI with specific errors to fix.
+ * @returns {Promise<string|null>} Fixed EQF or null if it couldn't fix
+ */
+async function requestAiFix(eqfContent, issues, referenceData) {
+  const apiKey = getApiKey();
+  const issueList = issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n');
+
+  const fixPrompt = `You are an EQF quest file fixer. The following quest file has been validated and has these specific errors that MUST be fixed:
+
+## ERRORS TO FIX:
+${issueList}
+
+## HOW TO FIX COMMON ISSUES:
+- "Goto target X does not match any state": Add the missing state block, or fix the goto to point to an existing state name (check spelling/case)
+- "State X may be unreachable": Make sure some rule in another state has a "goto ${'{'}stateName${'}'}" pointing to it, or remove it if it's truly unnecessary
+- "Missing Main block / questname / version": Add the Main block with questname and version
+- "Missing state Begin block": Rename the first state to Begin, or add a Begin state
+- "Unknown action/rule": Fix the typo or replace with a valid action/rule name
+- "Quest has no End() or Reset()": Add a terminal state with End() or Reset()
 
 ## REFERENCE DATA:
 ${referenceData}
 
-## QUEST FILE TO AUDIT:
+## QUEST FILE TO FIX:
 ${eqfContent}
 
-## RESPONSE FORMAT:
-Respond with EXACTLY this format (no markdown fences):
+IMPORTANT: Output ONLY the complete, corrected .eqf file content. No markdown fences, no explanation, no headers — just the raw fixed quest file.`;
 
-AUDIT_STATUS: PASS or FIXED
-ISSUES: comma-separated list of issues found (or "none")
----EQF---
-<the complete quest file, corrected if needed, or unchanged if valid>`;
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: getModel(),
+      config: {
+        temperature: 0.1, // Very low temperature for precise fixes
+      },
+      contents: fixPrompt,
+    });
 
-  const ai = new GoogleGenAI({ apiKey });
-  const response = await ai.models.generateContent({
-    model: getModel(),
-    config: {
-      temperature: 0.2, // Low temperature for precise validation
-    },
-    contents: auditPrompt,
-  });
+    let fixed = response.text?.trim();
+    if (!fixed) return null;
 
-  const text = response.text?.trim();
-  if (!text) {
-    return { eqf: eqfContent, wasFixed: false, issues: [] };
+    // Strip any markdown code fences
+    if (fixed.startsWith('```')) {
+      fixed = fixed.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '');
+    }
+
+    // Basic sanity check — must still look like an EQF file
+    if (!fixed.includes('Main') || !fixed.includes('state')) {
+      return null;
+    }
+
+    return fixed;
+  } catch {
+    return null;
   }
-
-  // Parse the audit response
-  const eqfSplit = text.split('---EQF---');
-  if (eqfSplit.length < 2) {
-    // Couldn't parse response format — return original
-    return { eqf: eqfContent, wasFixed: false, issues: [] };
-  }
-
-  const header = eqfSplit[0].trim();
-  let fixedEqf = eqfSplit[1].trim();
-
-  // Strip any markdown code fences
-  if (fixedEqf.startsWith('```')) {
-    fixedEqf = fixedEqf.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '');
-  }
-
-  const wasFixed = header.includes('FIXED');
-  const issuesMatch = header.match(/ISSUES:\s*(.+)/i);
-  const issues = issuesMatch && issuesMatch[1].trim().toLowerCase() !== 'none'
-    ? issuesMatch[1].split(',').map(s => s.trim()).filter(Boolean)
-    : [];
-
-  return {
-    eqf: fixedEqf || eqfContent,
-    wasFixed,
-    issues,
-  };
 }

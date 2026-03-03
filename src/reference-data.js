@@ -115,6 +115,126 @@ export function searchAll(query) {
 }
 
 /**
+ * Score how well a query matches a candidate name.
+ * Higher = better match. Returns 0 for no match.
+ */
+function matchScore(query, candidateName) {
+  const q = query.toLowerCase();
+  const c = candidateName.toLowerCase();
+
+  // Exact match
+  if (q === c) return 100;
+
+  // Query matches start of candidate or vice versa
+  if (c.startsWith(q) || q.startsWith(c)) return 80;
+
+  // Substring match
+  if (c.includes(q) || q.includes(c)) return 60;
+
+  // Word overlap — how many words in the query appear in the candidate
+  const qWords = q.split(/\s+/);
+  const cWords = c.split(/\s+/);
+  const overlap = qWords.filter(w => cWords.some(cw => cw.includes(w) || w.includes(cw)));
+  if (overlap.length > 0) {
+    return 40 * (overlap.length / qWords.length);
+  }
+
+  return 0;
+}
+
+/**
+ * Extract potential entity names from a user prompt and find best matches
+ * from the loaded reference data. Returns pre-resolved matches the AI should use.
+ *
+ * @param {string} prompt - The user's natural language quest description
+ * @returns {string} A formatted string of pre-resolved entity matches
+ */
+export function resolveEntities(prompt) {
+  // Common words to ignore when generating n-grams
+  const stopWords = new Set([
+    'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'can', 'shall', 'must', 'that', 'this',
+    'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we', 'our', 'you',
+    'your', 'he', 'she', 'they', 'them', 'their', 'who', 'what', 'where',
+    'when', 'how', 'which', 'about', 'up', 'out', 'so', 'if', 'then',
+    'than', 'too', 'very', 'just', 'also', 'not', 'no', 'yes', 'all',
+    'each', 'every', 'some', 'any', 'make', 'create', 'quest', 'give',
+    'talk', 'go', 'get', 'kill', 'collect', 'find', 'bring', 'deliver',
+    'return', 'need', 'want', 'ask', 'tell', 'said', 'say', 'player',
+    'npc', 'item', 'monster', 'reward', 'exp',
+  ]);
+
+  // Generate n-grams (1 to 4 words) from the prompt
+  const words = prompt.split(/\s+/).filter(w => w.length > 0);
+  const ngrams = new Set();
+
+  for (let n = 1; n <= Math.min(4, words.length); n++) {
+    for (let i = 0; i <= words.length - n; i++) {
+      const gram = words.slice(i, i + n).join(' ');
+      // Skip if it's only stop words
+      const gramWords = gram.toLowerCase().split(/\s+/);
+      if (gramWords.every(w => stopWords.has(w))) continue;
+      // Skip very short single-word grams (likely not entity names)
+      if (n === 1 && gram.length < 3) continue;
+      ngrams.add(gram);
+    }
+  }
+
+  // Search all entity lists for matches
+  const allEntities = [
+    ...activeNpcs.map(e => ({ ...e, category: 'NPC' })),
+    ...activeItems.map(e => ({ ...e, category: 'Item' })),
+    ...activeSpells.map(e => ({ ...e, category: 'Spell' })),
+    ...activeClasses.map(e => ({ ...e, category: 'Class' })),
+  ];
+
+  // For each n-gram, find best matching entity
+  const matches = [];
+  const seenIds = new Set();
+
+  for (const gram of ngrams) {
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const entity of allEntities) {
+      const score = matchScore(gram, entity.name);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = { ...entity, score, matchedQuery: gram };
+      }
+    }
+
+    // Only include matches with a reasonable score
+    if (bestMatch && bestScore >= 40) {
+      const key = `${bestMatch.category}:${bestMatch.id}`;
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        matches.push(bestMatch);
+      }
+    }
+  }
+
+  if (matches.length === 0) return '';
+
+  // Sort by score descending
+  matches.sort((a, b) => b.score - a.score);
+
+  // Format as a string for the AI prompt
+  let out = 'PRE-RESOLVED ENTITY MATCHES (use these exact IDs):\n';
+  out += matches.map(m => {
+    const details = [];
+    if (m.typeName) details.push(m.typeName);
+    if (m.hp) details.push(`HP:${m.hp}`);
+    if (m.exp) details.push(`EXP:${m.exp}`);
+    return `  ⭐ "${m.matchedQuery}" → ${m.category} ID ${m.id}: ${m.name} (${details.join(', ') || m.category})`;
+  }).join('\n');
+
+  return out;
+}
+
+/**
  * Build a reference data string for the Gemini system prompt.
  * With custom data, includes up to 200 of each for context.
  */
