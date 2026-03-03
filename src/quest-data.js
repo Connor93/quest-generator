@@ -188,6 +188,15 @@ else GiveItem(1, 5000);
 - Reward states should use ShowHint, PlaySound(97), then End()
 - Use ShowHint("Quest reward: X EXP!") early to tell player the reward
 
+### ENTITY MATCHING (CRITICAL):
+When the user mentions an NPC name, item name, monster name, or any other entity:
+1. Search ALL entries in the reference data below to find the BEST match — do NOT just use the first one you find.
+2. Match priority: EXACT name match > case-insensitive exact match > closest substring match.
+3. For example, if the user says "Pirate Captain Tobias", use "Pirate Captain Tobias" (ID 6), NOT "Old Pirate" (ID 5) even though "Old Pirate" appears first in the list.
+4. If the user provides an ID number directly, always use that exact ID.
+5. If no good match exists, pick the closest name and note it in an NPC chat line so the quest designer can verify.
+6. NEVER default to the first entry in the list. Always scan the entire list for the best match.
+
 ### STYLE GUIDELINES:
 - Write immersive, character-appropriate NPC dialog
 - Use [name] to address the player personally
@@ -197,6 +206,18 @@ else GiveItem(1, 5000);
 - Add ShowHint messages at key transitions
 - Use PlaySound(18) after major state transitions
 - State names should be PascalCase and descriptive
+
+### SELF-AUDIT CHECKLIST (verify before outputting):
+Before outputting the quest file, mentally verify ALL of the following:
+1. Every "goto StateName" target exists as a defined "state StateName" block
+2. Every AddNpcInput link_id has a matching InputNpc(link_id) rule in the same state
+3. Every state is reachable (referenced by at least one goto, or is "Begin")
+4. The quest terminates properly — at least one path leads to End() or Reset()
+5. All vendor_id, npc_id, and item_id values match entries from the reference data
+6. No duplicate state names exist
+7. State names are valid identifiers (PascalCase, no spaces)
+8. Actions use correct argument types (strings in quotes, numbers without quotes)
+If any check fails, fix the issue before outputting.
 
 ${referenceData ? `### REFERENCE DATA:\n${referenceData}` : ''}
 

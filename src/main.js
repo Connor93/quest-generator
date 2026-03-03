@@ -6,7 +6,7 @@ import './style.css';
 import { ACTIONS, RULES } from './quest-data.js';
 import { getNpcs, getItems, getClasses, getSpells, SOUNDS, searchAll, setGameData, resetToDefaults, isCustomDataLoaded } from './reference-data.js';
 import { TEMPLATES, generateFromTemplate } from './quest-builder.js';
-import { generateQuest, refineQuest, getApiKey, setApiKey, getModel, setModel, isConfigured, testConnection } from './gemini-service.js';
+import { generateQuest, refineQuest, auditQuest, getApiKey, setApiKey, getModel, setModel, isConfigured, testConnection } from './gemini-service.js';
 import { highlightEqf } from './eqf-generator.js';
 import { validateEqf } from './eqf-validator.js';
 import { loadDataFiles, saveToStorage, loadFromStorage, clearStorage, getDataSummary } from './pub-loader.js';
@@ -227,7 +227,24 @@ async function handleGenerateAI() {
 
     currentEqf = eqf;
     updatePreview();
-    showStatus('Quest generated successfully!', 'success');
+
+    // Auto-audit the generated quest
+    showStatus('Auditing quest...', 'info');
+    btn.innerHTML = '<span class="spinner"></span> Auditing...';
+    try {
+      const audit = await auditQuest(eqf);
+      currentEqf = audit.eqf;
+      updatePreview();
+      if (audit.wasFixed) {
+        showStatus(`Quest auto-fixed during audit 🔧 (${audit.issues.join('; ')})`, 'success');
+      } else {
+        showStatus('Quest generated and passed audit ✅', 'success');
+      }
+    } catch (auditErr) {
+      // Audit failed but we still have the original quest
+      showStatus('Quest generated (audit skipped: ' + auditErr.message + ')', 'success');
+    }
+
     $('#refine-section').classList.remove('hidden');
   } catch (err) {
     showStatus(`Generation failed: ${err.message}`, 'error');
@@ -255,7 +272,22 @@ async function handleRefine() {
     const refined = await refineQuest(currentEqf, instruction);
     currentEqf = refined;
     updatePreview();
-    showStatus('Quest refined!', 'success');
+
+    // Auto-audit the refined quest
+    showStatus('Auditing refined quest...', 'info');
+    try {
+      const audit = await auditQuest(refined);
+      currentEqf = audit.eqf;
+      updatePreview();
+      if (audit.wasFixed) {
+        showStatus(`Quest refined and auto-fixed 🔧 (${audit.issues.join('; ')})`, 'success');
+      } else {
+        showStatus('Quest refined and passed audit ✅', 'success');
+      }
+    } catch (auditErr) {
+      showStatus('Quest refined (audit skipped: ' + auditErr.message + ')', 'success');
+    }
+
     $('#refine-input').value = '';
   } catch (err) {
     showStatus(`Refine failed: ${err.message}`, 'error');

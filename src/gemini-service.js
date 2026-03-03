@@ -142,3 +142,87 @@ export async function refineQuest(currentEqf, instruction) {
 
   return cleaned;
 }
+
+/**
+ * Audit a generated quest by sending it back to the AI for validation.
+ * If issues are found, the AI returns a corrected version.
+ * @param {string} eqfContent - The generated EQF content to audit
+ * @returns {Promise<{eqf: string, wasFixed: boolean, issues: string[]}>}
+ */
+export async function auditQuest(eqfContent) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { eqf: eqfContent, wasFixed: false, issues: [] };
+  }
+
+  const referenceData = buildReferenceString();
+
+  const auditPrompt = `You are an EQF quest file validator. Analyze the following quest file for errors and fix any issues you find.
+
+## CHECKS TO PERFORM:
+1. Every "goto StateName" target must exist as a defined "state StateName" block
+2. Every AddNpcInput link_id must have a matching InputNpc(link_id) rule in the SAME state
+3. Every state must be reachable (referenced by at least one goto, or is "Begin")
+4. The quest must terminate properly — at least one path leads to End() or Reset()
+5. All vendor_id values in AddNpcText/AddNpcInput/AddNpcChat must be consistent within each NPC
+6. No duplicate state names
+7. State names must be valid identifiers (no spaces, PascalCase preferred)
+8. Actions must use correct argument types (strings in quotes, numbers without)
+9. Every state transition must be logically sound (no impossible progression)
+10. The Main block must have questname and version
+
+## REFERENCE DATA:
+${referenceData}
+
+## QUEST FILE TO AUDIT:
+${eqfContent}
+
+## RESPONSE FORMAT:
+Respond with EXACTLY this format (no markdown fences):
+
+AUDIT_STATUS: PASS or FIXED
+ISSUES: comma-separated list of issues found (or "none")
+---EQF---
+<the complete quest file, corrected if needed, or unchanged if valid>`;
+
+  const ai = new GoogleGenAI({ apiKey });
+  const response = await ai.models.generateContent({
+    model: getModel(),
+    config: {
+      temperature: 0.2, // Low temperature for precise validation
+    },
+    contents: auditPrompt,
+  });
+
+  const text = response.text?.trim();
+  if (!text) {
+    return { eqf: eqfContent, wasFixed: false, issues: [] };
+  }
+
+  // Parse the audit response
+  const eqfSplit = text.split('---EQF---');
+  if (eqfSplit.length < 2) {
+    // Couldn't parse response format — return original
+    return { eqf: eqfContent, wasFixed: false, issues: [] };
+  }
+
+  const header = eqfSplit[0].trim();
+  let fixedEqf = eqfSplit[1].trim();
+
+  // Strip any markdown code fences
+  if (fixedEqf.startsWith('```')) {
+    fixedEqf = fixedEqf.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '');
+  }
+
+  const wasFixed = header.includes('FIXED');
+  const issuesMatch = header.match(/ISSUES:\s*(.+)/i);
+  const issues = issuesMatch && issuesMatch[1].trim().toLowerCase() !== 'none'
+    ? issuesMatch[1].split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  return {
+    eqf: fixedEqf || eqfContent,
+    wasFixed,
+    issues,
+  };
+}
