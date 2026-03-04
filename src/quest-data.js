@@ -148,23 +148,36 @@ state Begin
 }
 \`\`\`
 
-### KEY RULES:
+### KEY SYNTAX RULES (follow EXACTLY or the quest WILL NOT PARSE):
 1. Every quest MUST have a Main block with questname and version
 2. Every quest MUST start with a "state Begin" block
 3. States contain: desc (optional), actions, and rules
-4. Actions are executed when entering a state
-5. Rules define transitions: when condition is met, goto target state
-6. AddNpcText adds dialog pages, AddNpcInput adds clickable choices
-7. AddNpcChat sets what NPC says outside quest dialog
-8. vendor_id identifies which NPC the dialog belongs to
-9. link_id in AddNpcInput must match InputNpc rules
-10. Use ShowHint for status bar messages
-11. PlaySound(18) for hint notifications, PlaySound(17) for warnings, PlaySound(97) for quest completion
-12. Use [name] in dialog text to insert the player's name
-13. End() permanently ends a quest, Reset() makes it restartable
-14. Use SetMap(map_id, x, y) to warp the player
-15. Indentation uses tabs
-16. Semicolons at end of action and rule lines are standard but optional
+4. **EVERY action line MUST start with the keyword \`action\`** — e.g. \`action ShowHint("text")\`
+5. **EVERY rule line MUST start with the keyword \`rule\`** — e.g. \`rule GotItems(12, 20) goto NextState\`
+6. **\`goto\` is NOT a function** — write \`goto StateName\` NOT \`goto(StateName)\`
+7. Function calls ALWAYS use parentheses with NO space before \`(\`: \`FuncName(arg1, arg2)\`
+8. String arguments MUST be in double quotes: \`"like this"\`
+9. Numeric arguments must NOT be in quotes: \`GotItems(12, 20)\` not \`GotItems("12", "20")\`
+10. Only these keywords are valid inside state blocks: \`action\`, \`rule\`, \`desc\`, \`goal\`, \`if\`, \`elseif\`, \`else\`
+11. Only these keywords are valid inside Main: \`questname\`, \`version\`, \`hidden\`, \`hidden_end\`, \`disabled\`
+12. vendor_id identifies which NPC the dialog belongs to — it is always a number
+13. link_id in AddNpcInput must match InputNpc rules — it is always a number
+14. Use ShowHint for status bar messages
+15. PlaySound(18) for hint notifications, PlaySound(17) for warnings, PlaySound(97) for quest completion
+16. Use [name] in dialog text to insert the player's name
+17. End() permanently ends a quest, Reset() makes it restartable
+18. Indentation uses tabs
+19. Semicolons at end of action and rule lines are standard but optional
+20. ONLY use actions and rules from the AVAILABLE ACTIONS and AVAILABLE RULES lists below — do NOT invent new ones
+
+### COMMON SYNTAX ERRORS (NEVER DO THESE):
+- WRONG: \`ShowHint("text")\` → RIGHT: \`action ShowHint("text")\` (missing \`action\` keyword)
+- WRONG: \`GotItems(12, 20) goto X\` → RIGHT: \`rule GotItems(12, 20) goto X\` (missing \`rule\` keyword)
+- WRONG: \`goto(NextState)\` → RIGHT: \`goto NextState\` (goto is NOT a function call)
+- WRONG: \`rule InputNpc(1) goto(Next)\` → RIGHT: \`rule InputNpc(1) goto Next\`
+- WRONG: \`action AddNpcText(1, text)\` → RIGHT: \`action AddNpcText(1, "text")\` (strings need quotes)
+- WRONG: \`GiveItem ("item", 1)\` → RIGHT: \`action GiveItem(1, 1)\` (no space before paren, use numeric IDs)
+- WRONG: \`action  ShowHint ("text")\` → RIGHT: \`action ShowHint("text")\` (no extra spaces)
 
 ### AVAILABLE ACTIONS:
 ${ACTIONS.map(a => `- ${a.name}(${a.args.map(arg => arg.optional ? `[${arg.name}]` : arg.name).join(', ')}) — ${a.desc}`).join('\n')}
