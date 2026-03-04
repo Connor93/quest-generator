@@ -203,7 +203,7 @@ To stay safe, follow these CHARACTER LIMITS (assuming average character width):
 - **ShowHint**: Maximum ~120 characters. The server truncates to ChatMaxWidth (1400 pixels). Keep hint messages short and punchy.
 - **AddNpcText**: Maximum ~150 characters PER CALL. The dialog window is narrow (~255 pixels). For longer NPC speeches, split across multiple AddNpcText calls.
 - **AddNpcChat**: Maximum ~120 characters. Same display constraints as ShowHint.
-- **desc** (state description): Maximum ~150 characters. Shown in the quest log panel. Keep descriptions concise.
+- **desc** (state description): Maximum 32 characters. Shown in the quest log panel. Keep descriptions very short.
 - **SetTitle**: Maximum 32 characters.
 If a message is long, SPLIT it into multiple AddNpcText calls rather than writing one long string.
 

@@ -106,8 +106,8 @@ export function validateEqf(eqf) {
 
       // Check desc field length
       const descMatch = line.match(/^desc\s+"([^"]*)"/i);
-      if (descMatch && descMatch[1].length > 150) {
-        warnings.push(`Line ${lineNum}: State desc too long (${descMatch[1].length} chars, max ~150)`);
+      if (descMatch && descMatch[1].length > 32) {
+        warnings.push(`Line ${lineNum}: State desc too long (${descMatch[1].length} chars, max 32)`);
       }
 
       // Check rules
