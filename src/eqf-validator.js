@@ -80,6 +80,34 @@ export function validateEqf(eqf) {
         if (!actionMap.has(funcName)) {
           warnings.push(`Line ${lineNum}: Unknown action "${actionMatch[1]}"`);
         }
+
+        // Check text length limits
+        const stringArgs = [...line.matchAll(/"([^"]*)"/g)].map(m => m[1]);
+        if (funcName === 'showhint' || funcName === 'addnpcchat') {
+          for (const arg of stringArgs) {
+            if (arg.length > 120) {
+              warnings.push(`Line ${lineNum}: ${actionMatch[1]} text too long (${arg.length} chars, max ~120)`);
+            }
+          }
+        } else if (funcName === 'addnpctext') {
+          for (const arg of stringArgs) {
+            if (arg.length > 150) {
+              warnings.push(`Line ${lineNum}: AddNpcText too long (${arg.length} chars, max ~150) — split into multiple calls`);
+            }
+          }
+        } else if (funcName === 'settitle') {
+          for (const arg of stringArgs) {
+            if (arg.length > 32) {
+              warnings.push(`Line ${lineNum}: SetTitle too long (${arg.length} chars, max 32)`);
+            }
+          }
+        }
+      }
+
+      // Check desc field length
+      const descMatch = line.match(/^desc\s+"([^"]*)"/i);
+      if (descMatch && descMatch[1].length > 150) {
+        warnings.push(`Line ${lineNum}: State desc too long (${descMatch[1].length} chars, max ~150)`);
       }
 
       // Check rules

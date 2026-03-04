@@ -197,6 +197,16 @@ When the user mentions an NPC name, item name, monster name, or any other entity
 5. If no good match exists, pick the closest name and note it in an NPC chat line so the quest designer can verify.
 6. NEVER default to the first entry in the list. Always scan the entire list for the best match.
 
+### TEXT LENGTH LIMITS (CRITICAL):
+The game client uses a variable-width pixel font. The server caps text based on pixel width, not character count.
+To stay safe, follow these CHARACTER LIMITS (assuming average character width):
+- **ShowHint**: Maximum ~120 characters. The server truncates to ChatMaxWidth (1400 pixels). Keep hint messages short and punchy.
+- **AddNpcText**: Maximum ~150 characters PER CALL. The dialog window is narrow (~255 pixels). For longer NPC speeches, split across multiple AddNpcText calls.
+- **AddNpcChat**: Maximum ~120 characters. Same display constraints as ShowHint.
+- **desc** (state description): Maximum ~150 characters. Shown in the quest log panel. Keep descriptions concise.
+- **SetTitle**: Maximum 32 characters.
+If a message is long, SPLIT it into multiple AddNpcText calls rather than writing one long string.
+
 ### STYLE GUIDELINES:
 - Write immersive, character-appropriate NPC dialog
 - Use [name] to address the player personally
