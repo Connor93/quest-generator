@@ -13,6 +13,7 @@ import { loadDataFiles, saveToStorage, loadFromStorage, clearStorage, getDataSum
 import {
   openQuestFolder, getQuestList, getQuestContent, getQuestCount,
   saveQuestToFolder, saveNewQuestToFolder, hasDirectoryAccess, updateQuestContent,
+  restoreSavedFolder,
 } from './quest-folder.js';
 
 // ===== STATE =====
@@ -988,9 +989,19 @@ function showToast(message) {
 
 // ===== QUEST FOLDER =====
 
-function initQuestFolder() {
+async function initQuestFolder() {
   // Show/hide "Save to Folder" button based on directory access
   updateSaveFolderBtn();
+
+  // Try to restore previously-opened folder
+  const result = await restoreSavedFolder();
+  if (result && result.count > 0) {
+    const statusEl = $('#quest-folder-status');
+    statusEl.textContent = `📂 ${result.count} quest${result.count !== 1 ? 's' : ''} restored`;
+    $('#quest-folder-search-section').classList.remove('hidden');
+    renderQuestList();
+    updateSaveFolderBtn();
+  }
 }
 
 async function handleOpenFolder() {

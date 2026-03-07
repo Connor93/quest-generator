@@ -12,6 +12,51 @@ let dirHandle = null;
 /** @type {Map<string, {content: string, handle: FileSystemFileHandle|null}>} */
 const questFiles = new Map();
 
+// ── IndexedDB Persistence ────────────────────────────────────────
+
+const IDB_NAME = 'quest-folder-store';
+const IDB_STORE = 'handles';
+const IDB_KEY = 'questDirHandle';
+
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveHandleToIDB(handle) {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch (e) {
+    console.warn('Could not persist folder handle:', e);
+  }
+}
+
+async function loadHandleFromIDB() {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    return new Promise((res) => { req.onsuccess = () => res(req.result || null); req.onerror = () => res(null); });
+  } catch {
+    return null;
+  }
+}
+
+async function clearHandleFromIDB() {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(IDB_KEY);
+  } catch { /* ignore */ }
+}
+
 // ── Feature Detection ────────────────────────────────────────────
 
 /** Whether the File System Access API is available (Chromium browsers). */
@@ -59,6 +104,9 @@ async function openWithDirectoryPicker() {
       errors.push(`Failed to read ${name}: ${e.message}`);
     }
   }
+
+  // Persist the handle for next visit
+  await saveHandleToIDB(dirHandle);
 
   return { count: questFiles.size, errors };
 }
@@ -252,6 +300,58 @@ export function updateQuestContent(filename, content) {
 export function clearQuestFolder() {
   questFiles.clear();
   dirHandle = null;
+  clearHandleFromIDB();
+}
+
+// ── Restore Saved Folder ─────────────────────────────────────────
+
+/**
+ * Attempt to restore a previously-opened quest folder from IndexedDB.
+ * Returns null if no saved handle, permission denied, or not supported.
+ * @returns {Promise<{count: number, errors: string[]}|null>}
+ */
+export async function restoreSavedFolder() {
+  if (!supportsDirectoryPicker()) return null;
+
+  const savedHandle = await loadHandleFromIDB();
+  if (!savedHandle) return null;
+
+  // Verify we still have permission (browser may prompt the user)
+  try {
+    const perm = await savedHandle.queryPermission({ mode: 'readwrite' });
+    if (perm === 'granted') {
+      dirHandle = savedHandle;
+    } else {
+      const requested = await savedHandle.requestPermission({ mode: 'readwrite' });
+      if (requested !== 'granted') return null;
+      dirHandle = savedHandle;
+    }
+  } catch {
+    return null;
+  }
+
+  // Re-load files from the directory
+  questFiles.clear();
+  const errors = [];
+  try {
+    for await (const [name, entry] of dirHandle.entries()) {
+      if (entry.kind !== 'file' || !name.toLowerCase().endsWith('.eqf')) continue;
+      try {
+        const file = await entry.getFile();
+        const content = await file.text();
+        questFiles.set(name, { content, handle: entry });
+      } catch (e) {
+        errors.push(`Failed to read ${name}: ${e.message}`);
+      }
+    }
+  } catch {
+    // Handle may have become invalid
+    dirHandle = null;
+    await clearHandleFromIDB();
+    return null;
+  }
+
+  return { count: questFiles.size, errors };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
