@@ -20,6 +20,8 @@ let currentEqf = '';
 let selectedTemplate = null;
 let isDirty = false;
 let loadedFromFile = null; // filename if loaded from quest folder, null otherwise
+let isEditing = false;
+let editDebounceTimer = null;
 
 // ===== DOM REFS =====
 const $ = (sel) => document.querySelector(sel);
@@ -164,6 +166,17 @@ function initEventListeners() {
   $('#btn-download').addEventListener('click', handleDownload);
   $('#btn-auto-fix').addEventListener('click', handleAutoFix);
   $('#btn-fix-ai').addEventListener('click', handleFixWithAI);
+  $('#btn-edit').addEventListener('click', toggleEdit);
+
+  // Editor textarea — sync changes back to state with debounced validation
+  $('#eqf-editor').addEventListener('input', () => {
+    currentEqf = $('#eqf-editor').value;
+    isDirty = true;
+    clearTimeout(editDebounceTimer);
+    editDebounceTimer = setTimeout(() => {
+      updateValidation();
+    }, 400);
+  });
 
   // Reference panel
   $('#btn-reference').addEventListener('click', () => togglePanel('reference-panel'));
@@ -399,9 +412,20 @@ function handleBuildTemplate() {
 
 // ===== PREVIEW =====
 function updatePreview() {
+  // If user is in edit mode, just update validation — don't overwrite the textarea
+  if (isEditing) {
+    $('#eqf-editor').value = currentEqf;
+    updateValidation();
+    return;
+  }
+
   const codeEl = $('#eqf-code');
   codeEl.innerHTML = highlightEqf(currentEqf);
+  updateValidation();
+}
 
+/** Update validation badge + details without touching the preview content. */
+function updateValidation() {
   // Validate
   const result = validateEqf(currentEqf);
   const badge = $('#validation-badge');
@@ -435,6 +459,33 @@ function updatePreview() {
       result.warnings.map(w => `<div class="validation-warning">${w}</div>`).join('');
     autoFixBtn.classList.remove('hidden');
     aiFixBtn.classList.remove('hidden');
+  }
+}
+
+// ===== EDIT MODE =====
+function toggleEdit() {
+  const btn = $('#btn-edit');
+  const preview = $('#eqf-preview');
+  const editor = $('#eqf-editor');
+
+  if (isEditing) {
+    // Switch back to preview mode
+    isEditing = false;
+    btn.innerHTML = '✏️ Edit';
+    editor.classList.add('hidden');
+    preview.classList.remove('hidden');
+    // Re-render highlighted preview with whatever they edited
+    const codeEl = $('#eqf-code');
+    codeEl.innerHTML = highlightEqf(currentEqf);
+  } else {
+    // Switch to edit mode
+    if (!currentEqf) return;
+    isEditing = true;
+    btn.innerHTML = '✅ Done';
+    editor.value = currentEqf;
+    preview.classList.add('hidden');
+    editor.classList.remove('hidden');
+    editor.focus();
   }
 }
 
