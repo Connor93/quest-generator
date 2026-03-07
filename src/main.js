@@ -10,10 +10,16 @@ import { generateQuest, refineQuest, auditQuest, getApiKey, setApiKey, getModel,
 import { highlightEqf } from './eqf-generator.js';
 import { validateEqf } from './eqf-validator.js';
 import { loadDataFiles, saveToStorage, loadFromStorage, clearStorage, getDataSummary } from './pub-loader.js';
+import {
+  openQuestFolder, getQuestList, getQuestContent, getQuestCount,
+  saveQuestToFolder, saveNewQuestToFolder, hasDirectoryAccess, updateQuestContent,
+} from './quest-folder.js';
 
 // ===== STATE =====
 let currentEqf = '';
 let selectedTemplate = null;
+let isDirty = false;
+let loadedFromFile = null; // filename if loaded from quest folder, null otherwise
 
 // ===== DOM REFS =====
 const $ = (sel) => document.querySelector(sel);
@@ -26,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initReferencePanel();
   initSettings();
   initDataUpload();
+  initQuestFolder();
   initEventListeners();
 });
 
@@ -155,6 +162,8 @@ function initEventListeners() {
   // Preview actions
   $('#btn-copy').addEventListener('click', handleCopy);
   $('#btn-download').addEventListener('click', handleDownload);
+  $('#btn-auto-fix').addEventListener('click', handleAutoFix);
+  $('#btn-fix-ai').addEventListener('click', handleFixWithAI);
 
   // Reference panel
   $('#btn-reference').addEventListener('click', () => togglePanel('reference-panel'));
@@ -197,6 +206,13 @@ function initEventListeners() {
     selectedTemplate = null;
   });
 
+  // Quest folder panel
+  $('#btn-quests').addEventListener('click', () => togglePanel('quest-folder-panel'));
+  $('#btn-close-quests').addEventListener('click', () => closePanel('quest-folder-panel'));
+  $('#btn-open-folder').addEventListener('click', handleOpenFolder);
+  $('#btn-save-folder').addEventListener('click', handleSaveToFolder);
+  $('#quest-folder-search').addEventListener('input', renderQuestList);
+
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeAllPanels();
@@ -226,6 +242,8 @@ async function handleGenerateAI() {
     });
 
     currentEqf = eqf;
+    isDirty = true;
+    loadedFromFile = null;
     updatePreview();
 
     // Auto-audit the generated quest
@@ -236,6 +254,7 @@ async function handleGenerateAI() {
         showStatus(status, 'info');
       });
       currentEqf = audit.eqf;
+      isDirty = true;
       updatePreview();
       if (audit.wasFixed && audit.finalValid) {
         showStatus(`Quest auto-fixed during audit 🔧 (fixed: ${audit.issues.join('; ')})`, 'success');
@@ -277,6 +296,7 @@ async function handleRefine() {
   try {
     const refined = await refineQuest(currentEqf, instruction);
     currentEqf = refined;
+    isDirty = true;
     updatePreview();
 
     // Auto-audit the refined quest
@@ -286,6 +306,7 @@ async function handleRefine() {
         showStatus(status, 'info');
       });
       currentEqf = audit.eqf;
+      isDirty = true;
       updatePreview();
       if (audit.wasFixed && audit.finalValid) {
         showStatus(`Quest refined and auto-fixed 🔧 (fixed: ${audit.issues.join('; ')})`, 'success');
@@ -365,6 +386,8 @@ function handleBuildTemplate() {
 
   try {
     currentEqf = generateFromTemplate(selectedTemplate.id, params);
+    isDirty = true;
+    loadedFromFile = null;
     updatePreview();
     showStatus(`Quest built from "${selectedTemplate.name}" template!`, 'success');
     $('#refine-section').classList.remove('hidden');
@@ -386,15 +409,23 @@ function updatePreview() {
 
   badge.classList.remove('hidden');
 
+  // Show/hide the fix buttons
+  const autoFixBtn = $('#btn-auto-fix');
+  const aiFixBtn = $('#btn-fix-ai');
+
   if (result.valid && result.warnings.length === 0) {
     badge.className = 'validation-badge valid';
     badge.innerHTML = '<span class="badge-icon">✅</span><span class="badge-text">Valid</span>';
     details.classList.add('hidden');
+    autoFixBtn.classList.add('hidden');
+    aiFixBtn.classList.add('hidden');
   } else if (result.valid) {
     badge.className = 'validation-badge warnings';
     badge.innerHTML = `<span class="badge-icon">⚠️</span><span class="badge-text">${result.warnings.length} warning${result.warnings.length > 1 ? 's' : ''}</span>`;
     details.classList.remove('hidden');
     details.innerHTML = result.warnings.map(w => `<div class="validation-warning">${w}</div>`).join('');
+    autoFixBtn.classList.remove('hidden');
+    aiFixBtn.classList.remove('hidden');
   } else {
     badge.className = 'validation-badge invalid';
     badge.innerHTML = `<span class="badge-icon">❌</span><span class="badge-text">${result.errors.length} error${result.errors.length > 1 ? 's' : ''}</span>`;
@@ -402,10 +433,12 @@ function updatePreview() {
     details.innerHTML =
       result.errors.map(e => `<div class="validation-error">${e}</div>`).join('') +
       result.warnings.map(w => `<div class="validation-warning">${w}</div>`).join('');
+    autoFixBtn.classList.remove('hidden');
+    aiFixBtn.classList.remove('hidden');
   }
 }
 
-// ===== COPY / DOWNLOAD =====
+// ===== COPY / DOWNLOAD / FIX =====
 function handleCopy() {
   if (!currentEqf) return;
   navigator.clipboard.writeText(currentEqf).then(() => {
@@ -427,8 +460,268 @@ function handleDownload() {
   a.download = `${name}.eqf`;
   a.click();
   URL.revokeObjectURL(url);
+  isDirty = false;
   showToast(`Downloaded ${name}.eqf`);
 }
+
+let preFixEqf = null; // stored before AI fix for revert
+
+/** Local-only fix — no AI, instant. */
+function handleAutoFix() {
+  if (!currentEqf) return;
+
+  const beforeEqf = currentEqf;
+  const localFixed = localAutoFix(currentEqf);
+
+  if (localFixed === currentEqf) {
+    showStatus('No mechanical issues found to auto-fix.', 'info');
+    setTimeout(() => $('#generate-status').classList.add('hidden'), 3000);
+    return;
+  }
+
+  currentEqf = localFixed;
+  isDirty = true;
+  updatePreview();
+
+  const fixCount = countLocalFixes(beforeEqf, currentEqf);
+  preFixEqf = beforeEqf;
+  showDiff(beforeEqf, currentEqf);
+
+  const postResult = validateEqf(currentEqf);
+  if (postResult.valid && postResult.warnings.length === 0) {
+    showStatus(`All ${fixCount} issue(s) auto-fixed locally 🔧`, 'success');
+  } else {
+    const remaining = [...postResult.errors, ...postResult.warnings].length;
+    showStatus(`Fixed ${fixCount} issue(s) locally 🔧 — ${remaining} remaining issue(s) may need AI`, 'success');
+  }
+
+  $('#refine-section').classList.remove('hidden');
+}
+
+/** Fix with AI — runs local auto-fix first, then sends remaining issues to AI. */
+async function handleFixWithAI() {
+  if (!currentEqf) return;
+
+  const btn = $('#btn-fix-ai');
+  const autoBtn = $('#btn-auto-fix');
+  btn.disabled = true;
+  autoBtn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Fixing...';
+
+  // Capture the "before" state for diff/revert
+  const beforeEqf = currentEqf;
+
+  try {
+    // ── Pass 1: Local auto-fix (no AI needed) ──
+    const localFixed = localAutoFix(currentEqf);
+    const localChanged = localFixed !== currentEqf;
+    currentEqf = localFixed;
+
+    // Check what's left after local fixes
+    const postLocalResult = validateEqf(currentEqf);
+    const postLocalClean = postLocalResult.valid && postLocalResult.warnings.length === 0;
+
+    if (postLocalClean) {
+      // Local fixes resolved everything!
+      isDirty = true;
+      updatePreview();
+      showStatus('All issues auto-fixed locally 🔧 — no AI needed!', 'success');
+
+      if (localChanged) {
+        preFixEqf = beforeEqf;
+        showDiff(beforeEqf, currentEqf);
+      }
+      $('#refine-section').classList.remove('hidden');
+      return;
+    }
+
+    // ── Pass 2: AI fix for remaining issues ──
+    if (!isConfigured()) {
+      // Local fixes helped but there are remaining issues that need AI
+      if (localChanged) {
+        isDirty = true;
+        updatePreview();
+        preFixEqf = beforeEqf;
+        showDiff(beforeEqf, currentEqf);
+
+        const remaining = [...postLocalResult.errors, ...postLocalResult.warnings];
+        const list = remaining.map(i => `• ${i}`).join('\n');
+        showStatus(
+          `Fixed ${countLocalFixes(beforeEqf, currentEqf)} issue(s) locally, but ${remaining.length} remain that need AI:\n${list}\n\nConfigure an API key in ⚙️ Settings to fix these.`,
+          'error'
+        );
+      } else {
+        showStatus('These issues need AI to fix. Configure an API key in ⚙️ Settings.', 'error');
+      }
+      $('#refine-section').classList.remove('hidden');
+      return;
+    }
+
+    showStatus('Local fixes applied, sending remaining issues to AI...', 'info');
+
+    const audit = await auditQuest(currentEqf, validateEqf, (status) => {
+      showStatus(status, 'info');
+    });
+
+    currentEqf = audit.eqf;
+    isDirty = true;
+    updatePreview();
+
+    if (audit.wasFixed && audit.finalValid) {
+      showStatus(`Quest fully fixed 🔧 (AI fixed: ${audit.issues.join('; ')})`, 'success');
+    } else if (audit.wasFixed && !audit.finalValid) {
+      const remaining = audit.remainingIssues.map(i => `• ${i}`).join('\n');
+      showStatus(
+        `Partially fixed — ${audit.remainingIssues.length} issue(s) remain:\n${remaining}\n\nTry using refine to fix these manually.`,
+        'error'
+      );
+    } else if (!audit.wasFixed && audit.issues.length > 0) {
+      const issueList = audit.issues.map(i => `• ${i}`).join('\n');
+      showStatus(
+        `AI could not fix ${audit.issues.length} issue(s):\n${issueList}\n\nTry using the refine input below to explain how to fix these.`,
+        'error'
+      );
+    } else {
+      showStatus('Quest is already valid ✅', 'success');
+    }
+
+    // Show diff for the full before→after (local + AI combined)
+    if (beforeEqf !== currentEqf) {
+      preFixEqf = beforeEqf;
+      showDiff(beforeEqf, currentEqf);
+    }
+
+    $('#refine-section').classList.remove('hidden');
+  } catch (err) {
+    showStatus(`Fix failed: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    autoBtn.disabled = false;
+    btn.innerHTML = '🤖 Fix with AI';
+  }
+}
+
+/**
+ * Apply deterministic, mechanical fixes that don't need AI.
+ * These match the exact patterns flagged by eqf-validator.js warnings.
+ */
+function localAutoFix(eqf) {
+  let fixed = eqf;
+
+  // Fix: Space before "(" in function calls — e.g. "ShowHint (" → "ShowHint("
+  // Matches: action/rule FunctionName (args) pattern with a space before the paren
+  fixed = fixed.replace(/^(\s*(?:action|rule)\s+\w+)\s+\(/gm, '$1(');
+
+  // Also fix conditional lines: if/else if FunctionName (args)
+  fixed = fixed.replace(/^(\s*(?:if|else\s+if)\s+\w+)\s+\(/gm, '$1(');
+
+  // Fix: Numeric arguments quoted as strings — e.g. GiveItem("123", 1) → GiveItem(123, 1)
+  // This is trickier and more context-dependent, so we skip it for now to avoid
+  // accidentally breaking string args that happen to look numeric.
+
+  return fixed;
+}
+
+/** Count how many lines differ between two EQF strings (rough fix count). */
+function countLocalFixes(before, after) {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  let count = 0;
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i++) {
+    if (a[i] !== b[i]) count++;
+  }
+  return count;
+}
+
+// ===== DIFF VIEW =====
+
+/**
+ * Compute a simple line-level diff between two text strings.
+ * Returns an array of {type, text} where type is 'same', 'add', or 'remove'.
+ */
+function computeLineDiff(before, after) {
+  const linesA = before.split('\n');
+  const linesB = after.split('\n');
+
+  // Simple LCS-based diff
+  const m = linesA.length, n = linesB.length;
+  // Build LCS length table
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (linesA[i] === linesB[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  // Walk the table to produce diff
+  const result = [];
+  let i = 0, j = 0;
+  while (i < m || j < n) {
+    if (i < m && j < n && linesA[i] === linesB[j]) {
+      result.push({ type: 'same', text: linesA[i] });
+      i++; j++;
+    } else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) {
+      result.push({ type: 'add', text: linesB[j] });
+      j++;
+    } else {
+      result.push({ type: 'remove', text: linesA[i] });
+      i++;
+    }
+  }
+  return result;
+}
+
+function showDiff(before, after) {
+  const diffLines = computeLineDiff(before, after);
+  const panel = $('#diff-panel');
+  const content = $('#diff-content');
+
+  content.innerHTML = diffLines.map(line => {
+    const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+    const cls = line.type === 'add' ? 'diff-add' : line.type === 'remove' ? 'diff-remove' : 'diff-same';
+    const escaped = line.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<div class="diff-line ${cls}"><span class="diff-prefix">${prefix}</span>${escaped}</div>`;
+  }).join('');
+
+  panel.classList.remove('hidden');
+
+  // Wire revert + dismiss buttons (one-time)
+  const revertBtn = $('#btn-revert-fix');
+  const dismissBtn = $('#btn-dismiss-diff');
+  const onRevert = () => {
+    if (preFixEqf !== null) {
+      currentEqf = preFixEqf;
+      isDirty = true;
+      preFixEqf = null;
+      updatePreview();
+      hideDiff();
+      showToast('Reverted to pre-fix version');
+    }
+  };
+  const onDismiss = () => {
+    preFixEqf = null;
+    hideDiff();
+  };
+
+  revertBtn.replaceWith(revertBtn.cloneNode(true));
+  dismissBtn.replaceWith(dismissBtn.cloneNode(true));
+  $('#btn-revert-fix').addEventListener('click', onRevert);
+  $('#btn-dismiss-diff').addEventListener('click', onDismiss);
+}
+
+function hideDiff() {
+  $('#diff-panel').classList.add('hidden');
+  $('#diff-content').innerHTML = '';
+}
+
 
 // ===== REFERENCE PANEL =====
 function initReferencePanel() {
@@ -607,7 +900,7 @@ function closePanel(id) {
 }
 
 function closeAllPanels() {
-  ['reference-panel', 'settings-panel'].forEach(id => {
+  ['quest-folder-panel', 'reference-panel', 'settings-panel'].forEach(id => {
     const panel = $(`#${id}`);
     if (panel.classList.contains('visible')) {
       closePanel(id);
@@ -623,7 +916,8 @@ function showStatus(message, type = 'info') {
   if (type === 'success') status.classList.add('success');
 
   const icon = type === 'error' ? '❌' : type === 'success' ? '✅' : '<span class="spinner"></span>';
-  status.innerHTML = `${icon} ${message}`;
+  const htmlMessage = message.replace(/\n/g, '<br>');
+  status.innerHTML = `${icon} ${htmlMessage}`;
 
   if (type === 'success') {
     setTimeout(() => status.classList.add('hidden'), 4000);
@@ -639,4 +933,194 @@ function showToast(message) {
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+// ===== QUEST FOLDER =====
+
+function initQuestFolder() {
+  // Show/hide "Save to Folder" button based on directory access
+  updateSaveFolderBtn();
+}
+
+async function handleOpenFolder() {
+  const statusEl = $('#quest-folder-status');
+  statusEl.textContent = '⏳ Opening folder...';
+
+  try {
+    const { count, errors } = await openQuestFolder();
+    if (count === 0 && errors.length === 0) {
+      statusEl.textContent = ''; // user cancelled
+      return;
+    }
+
+    statusEl.textContent = `📂 ${count} quest${count !== 1 ? 's' : ''} loaded`;
+    if (errors.length > 0) {
+      showToast(`⚠️ ${errors.join(', ')}`);
+    }
+
+    // Show search bar and render list
+    $('#quest-folder-search-section').classList.remove('hidden');
+    renderQuestList();
+    updateSaveFolderBtn();
+  } catch (err) {
+    statusEl.textContent = `❌ ${err.message}`;
+  }
+}
+
+function renderQuestList() {
+  const listEl = $('#quest-list');
+  const search = ($('#quest-folder-search')?.value || '').toLowerCase();
+  const quests = getQuestList();
+
+  if (quests.length === 0) {
+    listEl.innerHTML = `<div class="quest-list-empty">
+      <span>📂</span>
+      No quests loaded yet.<br>Click "Open Quest Folder" to get started.
+    </div>`;
+    return;
+  }
+
+  const filtered = search
+    ? quests.filter(q => q.questName.toLowerCase().includes(search) || q.filename.toLowerCase().includes(search))
+    : quests;
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = '<div class="quest-list-empty">No quests match your search.</div>';
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(q => {
+    const badge = q.errorCount > 0 ? '❌' : q.warningCount > 0 ? '⚠️' : '✅';
+    const stats = q.errorCount > 0
+      ? `${q.errorCount} error${q.errorCount > 1 ? 's' : ''}`
+      : q.warningCount > 0
+        ? `${q.warningCount} warn`
+        : 'valid';
+    const isActive = loadedFromFile === q.filename ? 'active' : '';
+
+    return `<div class="quest-list-item ${isActive}" data-filename="${q.filename}">
+      <div class="quest-list-badge">${badge}</div>
+      <div class="quest-list-info">
+        <div class="quest-list-name">${q.questName}</div>
+        <div class="quest-list-file">${q.filename}</div>
+      </div>
+      <div class="quest-list-stats">${stats}</div>
+    </div>`;
+  }).join('');
+
+  // Attach click handlers
+  listEl.querySelectorAll('.quest-list-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const filename = item.dataset.filename;
+      requestLoadQuest(filename);
+    });
+  });
+}
+
+/**
+ * Attempt to load a quest from the folder. If there are unsaved changes,
+ * show the confirmation modal first.
+ */
+function requestLoadQuest(filename) {
+  if (isDirty && currentEqf) {
+    showUnsavedModal(filename);
+  } else {
+    loadQuestFromFolder(filename);
+  }
+}
+
+function loadQuestFromFolder(filename) {
+  const content = getQuestContent(filename);
+  if (!content) {
+    showToast(`❌ Could not read ${filename}`);
+    return;
+  }
+
+  currentEqf = content;
+  isDirty = false;
+  loadedFromFile = filename;
+  updatePreview();
+  updateSaveFolderBtn();
+  renderQuestList(); // update active highlight
+  $('#refine-section').classList.remove('hidden');
+  closePanel('quest-folder-panel');
+  showToast(`Loaded: ${filename}`);
+}
+
+// ── Unsaved Changes Modal ────────────────────────────────────
+
+let pendingLoadFilename = null;
+
+function showUnsavedModal(filename) {
+  pendingLoadFilename = filename;
+  $('#unsaved-modal').classList.remove('hidden');
+
+  // Wire one-time handlers
+  const cleanup = () => {
+    $('#unsaved-modal').classList.add('hidden');
+    $('#btn-modal-save').removeEventListener('click', onSave);
+    $('#btn-modal-discard').removeEventListener('click', onDiscard);
+    $('#btn-modal-cancel').removeEventListener('click', onCancel);
+  };
+
+  const onSave = async () => {
+    cleanup();
+    await handleSaveToFolder();
+    loadQuestFromFolder(pendingLoadFilename);
+  };
+
+  const onDiscard = () => {
+    cleanup();
+    loadQuestFromFolder(pendingLoadFilename);
+  };
+
+  const onCancel = () => {
+    cleanup();
+    pendingLoadFilename = null;
+  };
+
+  $('#btn-modal-save').addEventListener('click', onSave);
+  $('#btn-modal-discard').addEventListener('click', onDiscard);
+  $('#btn-modal-cancel').addEventListener('click', onCancel);
+}
+
+// ── Save to Folder ───────────────────────────────────────────
+
+async function handleSaveToFolder() {
+  if (!currentEqf) return;
+
+  try {
+    let result;
+    if (loadedFromFile) {
+      // Save back to the same file
+      result = await saveQuestToFolder(loadedFromFile, currentEqf);
+      // Update in-memory copy so the quest list reflects changes
+      updateQuestContent(loadedFromFile, currentEqf);
+    } else {
+      // Save as a new file
+      result = await saveNewQuestToFolder(currentEqf);
+      loadedFromFile = result.filename;
+    }
+
+    isDirty = false;
+    updateSaveFolderBtn();
+    renderQuestList();
+
+    if (result.method === 'directory') {
+      showToast(`✅ Saved to folder: ${loadedFromFile}`);
+    } else {
+      showToast(`💾 Downloaded: ${loadedFromFile}`);
+    }
+  } catch (err) {
+    showToast(`❌ Save failed: ${err.message}`);
+  }
+}
+
+function updateSaveFolderBtn() {
+  const btn = $('#btn-save-folder');
+  if (hasDirectoryAccess() || getQuestCount() > 0) {
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
 }

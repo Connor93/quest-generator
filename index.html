@@ -20,6 +20,9 @@
           <span class="subtitle">EQF Quest Builder</span>
         </div>
         <div class="header-right">
+          <button id="btn-quests" class="header-btn" title="My Quests">
+            <span>📂</span> My Quests
+          </button>
           <button id="btn-reference" class="header-btn" title="Reference Data">
             <span>📖</span> Reference
           </button>
@@ -96,11 +99,20 @@
                 <span class="badge-icon">✅</span>
                 <span class="badge-text">Valid</span>
               </div>
+              <button id="btn-auto-fix" class="btn btn-fix btn-sm hidden" title="Fix mechanical issues locally (no AI)">
+                🔧 Auto-Fix
+              </button>
+              <button id="btn-fix-ai" class="btn btn-fix-ai btn-sm hidden" title="Fix issues with AI (includes auto-fix)">
+                🤖 Fix with AI
+              </button>
               <button id="btn-copy" class="btn btn-ghost btn-sm" title="Copy to clipboard">
                 📋 Copy
               </button>
               <button id="btn-download" class="btn btn-ghost btn-sm" title="Download .eqf file">
                 💾 Download
+              </button>
+              <button id="btn-save-folder" class="btn btn-ghost btn-sm hidden" title="Save to quest folder">
+                📂 Save to Folder
               </button>
             </div>
           </div>
@@ -112,8 +124,34 @@ Use "Generate with AI" to create a quest from a description,
 or select a template to get started.</span></code></pre>
           </div>
           <div id="validation-details" class="validation-details hidden"></div>
+          <div id="diff-panel" class="diff-panel hidden">
+            <div class="diff-panel-header">
+              <span class="diff-panel-title">🔧 Changes Made by AI Fix</span>
+              <button id="btn-revert-fix" class="btn btn-ghost btn-sm">↩️ Revert</button>
+              <button id="btn-dismiss-diff" class="btn btn-ghost btn-sm">✕</button>
+            </div>
+            <div id="diff-content" class="diff-content"></div>
+          </div>
         </section>
       </main>
+
+      <!-- Quest Folder Panel (slide-in) -->
+      <aside id="quest-folder-panel" class="slide-panel hidden">
+        <div class="slide-panel-header">
+          <h2>📂 My Quests</h2>
+          <button id="btn-close-quests" class="btn-close">✕</button>
+        </div>
+        <div class="quest-folder-actions">
+          <button id="btn-open-folder" class="btn btn-primary btn-sm">
+            📁 Open Quest Folder
+          </button>
+          <div id="quest-folder-status" class="quest-folder-status"></div>
+        </div>
+        <div class="quest-folder-search hidden" id="quest-folder-search-section">
+          <input type="text" id="quest-folder-search" placeholder="Search quests..." />
+        </div>
+        <div class="quest-list" id="quest-list"></div>
+      </aside>
 
       <!-- Reference Panel (slide-in) -->
       <aside id="reference-panel" class="slide-panel hidden">
@@ -189,6 +227,19 @@ or select a template to get started.</span></code></pre>
           </div>
         </div>
       </aside>
+
+      <!-- Unsaved Changes Modal -->
+      <div id="unsaved-modal" class="modal-overlay hidden">
+        <div class="modal-dialog">
+          <h3>⚠️ Unsaved Changes</h3>
+          <p>You have unsaved changes to the current quest. What would you like to do?</p>
+          <div class="modal-actions">
+            <button id="btn-modal-save" class="btn btn-primary btn-sm">💾 Save & Load</button>
+            <button id="btn-modal-discard" class="btn btn-secondary btn-sm">🗑️ Discard & Load</button>
+            <button id="btn-modal-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          </div>
+        </div>
+      </div>
 
       <!-- Overlay for panels -->
       <div id="overlay" class="overlay hidden"></div>
