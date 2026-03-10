@@ -134,18 +134,26 @@ export async function loadDataFiles(fileList) {
     try {
       const buffer = await file.arrayBuffer();
       switch (ext) {
-        case 'eif':
-          db.items = parseEif(buffer);
+        case 'eif': {
+          const parsed = parseEif(buffer);
+          db.items = db.items ? db.items.concat(parsed) : parsed;
           break;
-        case 'enf':
-          db.npcs = parseEnf(buffer);
+        }
+        case 'enf': {
+          const parsed = parseEnf(buffer);
+          db.npcs = db.npcs ? db.npcs.concat(parsed) : parsed;
           break;
-        case 'esf':
-          db.spells = parseEsf(buffer);
+        }
+        case 'esf': {
+          const parsed = parseEsf(buffer);
+          db.spells = db.spells ? db.spells.concat(parsed) : parsed;
           break;
-        case 'ecf':
-          db.classes = parseEcf(buffer);
+        }
+        case 'ecf': {
+          const parsed = parseEcf(buffer);
+          db.classes = db.classes ? db.classes.concat(parsed) : parsed;
           break;
+        }
         default:
           errors.push(`Skipped unknown file type: ${file.name}`);
       }
@@ -153,6 +161,12 @@ export async function loadDataFiles(fileList) {
       errors.push(`Failed to parse ${file.name}: ${e.message}`);
     }
   }
+
+  // Re-assign sequential IDs after merging split files
+  if (db.items) db.items.forEach((item, i) => { item.id = i + 1; });
+  if (db.npcs) db.npcs.forEach((npc, i) => { npc.id = i + 1; });
+  if (db.spells) db.spells.forEach((spell, i) => { spell.id = i + 1; });
+  if (db.classes) db.classes.forEach((cls, i) => { cls.id = i + 1; });
 
   return { db, errors };
 }
